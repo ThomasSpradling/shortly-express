@@ -4,6 +4,9 @@ const utils = require('./lib/hashUtils');
 const partials = require('express-partials');
 const Auth = require('./middleware/auth');
 const models = require('./models');
+const parseCookies = require('./middleware/cookieParser');
+const auth = require('./middleware/auth');
+
 
 const app = express();
 
@@ -13,31 +16,33 @@ app.use(partials());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../public')));
+app.use(parseCookies);
+app.use(auth.createSession);
 
-
-
-app.get('/', 
+app.get('/',
 (req, res) => {
-  res.render('index');
+  verifySession.call(this, req, res, () => res.render('index'));
 });
 
-app.get('/create', 
+app.get('/create',
 (req, res) => {
-  res.render('index');
+  verifySession.call(this, req, res, () => res.render('index'));
 });
 
-app.get('/links', 
+app.get('/links',
 (req, res, next) => {
-  models.Links.getAll()
-    .then(links => {
-      res.status(200).send(links);
-    })
-    .error(error => {
-      res.status(500).send(error);
-    });
+  verifySession.call(this, req, res, () => {
+    models.Links.getAll()
+      .then(links => {
+        res.status(200).send(links);
+      })
+      .error(error => {
+        res.status(500).send(error);
+      });
+  });
 });
 
-app.post('/links', 
+app.post('/links',
 (req, res, next) => {
   var url = req.body.url;
   if (!models.Links.isValidUrl(url)) {
@@ -77,6 +82,72 @@ app.post('/links',
 // Write your authentication routes here
 /************************************************************/
 
+app.get('/signup', (req, res) => {
+  res.render('signup');
+});
+
+app.get('/login', (req, res) => {
+  res.render('login');
+});
+
+app.get('/logout', (req, res) => {
+  models.Sessions.delete({ hash: req.session.hash })
+  .then(() => {
+      res.cookie('shortlyid', null);
+      req.session = {};
+      res.redirect('/');
+    });
+});
+
+app.post('/signup', (req, res) => {
+  const username = req.body.username;
+  models.Users.getAll({ username })
+    .then(user => {
+      if (user.length === 0) {
+        // console.log('SIGN UP: ', req.body);
+        models.Users.create(req.body)
+          .then(({ insertId }) => {
+            return models.Sessions.update({ hash: req.session.hash }, { userId: insertId });
+          })
+          .then(({ insertId }) => {
+            req.session.userId = insertId;
+            req.session.user = { username: req.body.username };
+            // console.log('Signed up successfully!');
+            res.redirect('/');
+          })
+      } else {
+        // console.log('Failed to signup: User already exists!');
+        res.redirect('/signup');
+      }
+    });
+});
+
+app.post('/login', (req, res) => {
+  const username = req.body.username;
+  models.Users.getAll({
+    username: username
+  })
+    .then(user => {
+      if (user.length === 0) {
+        // console.log('Failed to sign in: No such user exists!');
+        res.redirect('/login');
+      } else if (models.Users.compare(req.body.password, user[0].password, user[0].salt)) {
+        // console.log('Logged in successfully!');
+        res.redirect('/');
+      } else {
+        // console.log('Failed to sign in: Incorrect password!');
+        res.redirect('/login');
+      }
+    });
+});
+
+function verifySession(req, res, cb) {
+  if (req.session.userId) {
+    cb();
+  } else {
+    res.redirect('/login');
+  }
+}
 
 
 /************************************************************/
